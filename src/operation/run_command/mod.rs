@@ -45,6 +45,31 @@ impl<'conn> RunCommand<'conn> {
         })
     }
 
+    pub(crate) fn new_raw(
+        db: String,
+        command: RawDocumentBuf,
+        selection_criteria: Option<SelectionCriteria>,
+        pinned_connection: Option<&'conn PinnedConnectionHandle>,
+    ) -> Result<Self> {
+        // We avoid converting the entire command to a Document. Instead we find the writeConcern
+        // by iterating through the raw document and only convert that part if we find it.
+        let write_concern = command
+            .get("writeConcern")?
+            .and_then(|x| x.as_document())
+            .map(Document::try_from)
+            .transpose()?
+            .map(|doc| bson::from_bson::<WriteConcern>(bson::Bson::Document(doc)))
+            .transpose()?;
+
+        Ok(Self {
+            db,
+            command,
+            selection_criteria,
+            write_concern,
+            pinned_connection,
+        })
+    }
+
     #[cfg(feature = "in-use-encryption-unstable")]
     pub(crate) fn new_raw(
         db: String,

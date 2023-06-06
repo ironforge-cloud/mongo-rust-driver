@@ -4,6 +4,7 @@ use std::{fmt::Debug, sync::Arc};
 
 #[cfg(feature = "in-use-encryption-unstable")]
 use bson::doc;
+use bson::RawDocumentBuf;
 use futures_util::stream::TryStreamExt;
 
 use crate::{
@@ -464,6 +465,38 @@ impl Database {
         selection_criteria: impl Into<Option<SelectionCriteria>>,
     ) -> Result<Document> {
         self.run_command_common(command, selection_criteria, None, None)
+            .await
+    }
+
+    pub(crate) async fn run_command_common_raw(
+        &self,
+        command: RawDocumentBuf,
+        selection_criteria: impl Into<Option<SelectionCriteria>>,
+        session: impl Into<Option<&mut ClientSession>>,
+        pinned_connection: Option<&PinnedConnectionHandle>,
+    ) -> Result<Document> {
+        let operation = RunCommand::new_raw(
+            self.name().into(),
+            command,
+            selection_criteria.into(),
+            pinned_connection,
+        )?;
+        self.client().execute_operation(operation, session).await
+    }
+
+    /// Runs a database-level command.
+    ///
+    /// Note that no inspection is done on `doc`, so the command will not use the database's default
+    /// read concern or write concern. If specific read concern or write concern is desired, it must
+    /// be specified manually.
+    /// Allows providing the [command] as a raw document which matters for performance if you
+    /// already have a raw document to start with.
+    pub async fn run_command_raw(
+        &self,
+        command: RawDocumentBuf,
+        selection_criteria: impl Into<Option<SelectionCriteria>>,
+    ) -> Result<Document> {
+        self.run_command_common_raw(command, selection_criteria, None, None)
             .await
     }
 

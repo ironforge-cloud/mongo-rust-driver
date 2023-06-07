@@ -468,38 +468,6 @@ impl Database {
             .await
     }
 
-    pub(crate) async fn run_command_common_raw(
-        &self,
-        command: RawDocumentBuf,
-        selection_criteria: impl Into<Option<SelectionCriteria>>,
-        session: impl Into<Option<&mut ClientSession>>,
-        pinned_connection: Option<&PinnedConnectionHandle>,
-    ) -> Result<Document> {
-        let operation = RunCommand::new_raw(
-            self.name().into(),
-            command,
-            selection_criteria.into(),
-            pinned_connection,
-        )?;
-        self.client().execute_operation(operation, session).await
-    }
-
-    /// Runs a database-level command.
-    ///
-    /// Note that no inspection is done on `doc`, so the command will not use the database's default
-    /// read concern or write concern. If specific read concern or write concern is desired, it must
-    /// be specified manually.
-    /// Allows providing the [command] as a raw document which matters for performance if you
-    /// already have a raw document to start with.
-    pub async fn run_command_raw(
-        &self,
-        command: RawDocumentBuf,
-        selection_criteria: impl Into<Option<SelectionCriteria>>,
-    ) -> Result<Document> {
-        self.run_command_common_raw(command, selection_criteria, None, None)
-            .await
-    }
-
     /// Runs a database-level command using the provided `ClientSession`.
     ///
     /// If the `ClientSession` provided is currently in a transaction, `command` must not specify a
@@ -538,6 +506,83 @@ impl Database {
             _ => {}
         }
         self.run_command_common(command, selection_criteria, session, None)
+            .await
+    }
+
+    pub(crate) async fn run_command_common_raw(
+        &self,
+        command: RawDocumentBuf,
+        selection_criteria: impl Into<Option<SelectionCriteria>>,
+        session: impl Into<Option<&mut ClientSession>>,
+        pinned_connection: Option<&PinnedConnectionHandle>,
+    ) -> Result<Document> {
+        let operation = RunCommand::new_raw(
+            self.name().into(),
+            command,
+            selection_criteria.into(),
+            pinned_connection,
+        )?;
+        self.client().execute_operation(operation, session).await
+    }
+
+    /// Runs a database-level command.
+    ///
+    /// Note that no inspection is done on `doc`, so the command will not use the database's default
+    /// read concern or write concern. If specific read concern or write concern is desired, it must
+    /// be specified manually.
+    ///
+    /// Allows providing the [command] as a raw document which matters for performance if you
+    /// already have a raw document to start with.
+    pub async fn run_command_raw(
+        &self,
+        command: RawDocumentBuf,
+        selection_criteria: impl Into<Option<SelectionCriteria>>,
+    ) -> Result<Document> {
+        self.run_command_common_raw(command, selection_criteria, None, None)
+            .await
+    }
+
+    /// Runs a database-level command using the provided `ClientSession`.
+    ///
+    /// If the `ClientSession` provided is currently in a transaction, `command` must not specify a
+    /// read concern. If this operation is the first operation in the transaction, the read concern
+    /// associated with the transaction will be inherited.
+    ///
+    /// Otherwise no inspection is done on `command`, so the command will not use the database's
+    /// default read concern or write concern. If specific read concern or write concern is
+    /// desired, it must be specified manually.
+    ///
+    /// Allows providing the [command] as a raw document which matters for performance if you
+    /// already have a raw document to start with.
+    pub async fn run_command_with_session_raw(
+        &self,
+        command: RawDocumentBuf,
+        selection_criteria: impl Into<Option<SelectionCriteria>>,
+        session: &mut ClientSession,
+    ) -> Result<Document> {
+        let mut selection_criteria = selection_criteria.into();
+        match session.transaction.state {
+            TransactionState::Starting | TransactionState::InProgress => {
+                if command.get("readConcern")?.is_some() {
+                    return Err(ErrorKind::InvalidArgument {
+                        message: "Cannot set read concern after starting a transaction".into(),
+                    }
+                    .into());
+                }
+                selection_criteria = match selection_criteria {
+                    Some(selection_criteria) => Some(selection_criteria),
+                    None => {
+                        if let Some(ref options) = session.transaction.options {
+                            options.selection_criteria.clone()
+                        } else {
+                            None
+                        }
+                    }
+                };
+            }
+            _ => {}
+        }
+        self.run_command_common_raw(command, selection_criteria, session, None)
             .await
     }
 
